@@ -82,6 +82,20 @@ public class Path
         points.Add(anchorPos);
     }
 
+    //Returns the length of a segment with a resolution of 200
+    public float SegmentLength(int segment)
+    {
+        float length = 0;
+        Vector3 p1 = GetP(segment, 0f);
+        for (int i = 1; i <= 200; ++i)
+        {
+            Vector3 p2 = GetP(segment, (float)i / 200f);
+            length += (p2 - p1).magnitude;
+            p1 = p2;
+        }
+        return length;
+    }
+
     //Returns a point at time t in a segment
     public Vector3 GetP(int segment, float t)
     {
@@ -114,8 +128,23 @@ public class Path
     public Vector3 GetN(int segment, float t, Vector3 up)
     {
         Vector3 tng = GetT(segment, t);
-        Vector3 binormal = Vector3.Cross(up, tng).normalized;
-        return Vector3.Cross(tng, binormal);
+        Vector3 binormal = Vector3.Cross(up, tng);
+        return Vector3.Cross(tng, binormal).normalized;
+    }
+
+    //Create an array of normals for the whole Bezier Curve that minimize twisting as much as possible by refering to the previous normal
+    //This implementation is inspired from the Rotation Minimizing Frame algrorithm paper from Microsoft, albeit simplified
+    public Vector3[] GetConsistentNormals(Vector3 initialDirection, int segment, float resolution)
+    {
+        List<Vector3> normals = new List<Vector3>();
+        normals.Add(GetN(0, 0f, initialDirection));
+        int stepumber = (int)(SegmentLength(segment) / resolution);
+        for (int t = 0; t <= stepumber; ++t)
+        {
+            normals.Add(GetN(segment, (float)t / stepumber, normals[normals.Count - 1]));
+        }
+        normals.RemoveAt(0);
+        return normals.ToArray();
     }
 
     //Returns the orientation at time t in a segment
@@ -126,13 +155,34 @@ public class Path
         return Quaternion.LookRotation(tng, nrm);
     }
 
+    public Vector3 GetControlPoint(int i)
+    {
+        return points[i];
+    }
+
+    public void SplitSegment(Vector3 anchorPos, int segmentIndex)
+    {
+        Vector3[] segP = GetPointsInSegment(segmentIndex);
+        Vector3 anchor1 = anchorPos + (segP[1] - anchorPos) * 0.5f;
+        Vector3 anchor2 = anchorPos - (segP[1] - anchorPos) * 0.5f;
+        points.InsertRange(segmentIndex * 3 + 2, new Vector3[] { anchor1, anchorPos, anchor2 });
+    }
+
+    public void DeleteSegment(int anchorIndex)
+    {
+        if (anchorIndex % 3 == 0)
+        {
+            points.RemoveRange(anchorIndex - 1, 3);
+        }
+    }
+
     public void MovePoint(int i, Vector3 pos)
     {
+        Vector3 deltaMove = pos - points[i];
         points[i] = pos;
 
         if (i % 3 == 0)
         {
-            Vector3 deltaMove = pos - points[i];
             if (i + 1 < points.Count)
             {
                 points[i + 1] += deltaMove;

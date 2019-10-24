@@ -7,30 +7,38 @@ using UnityEditor;
 [RequireComponent(typeof(MeshFilter))]
 public class ProceduralTunnel : MonoBehaviour
 {
-    public Material mat;
+    Material mat;
     public List<float> radii;
-    public int Bres, Cres, Eres;
+    public int Cres;
+    public float Bres;
 
     Path path;
     List<List<Vector3>> circles;
+    bool showGrid = false;
 
-    public MeshFilter start, end;
+    public MeshFilter start;
 
     void Start()
     {
-        GetComponent<MeshRenderer>().material = mat;
+        mat = GetComponent<MeshRenderer>().material;
+        GetComponent<MeshRenderer>().enabled = false;
 
-        radii = new List<float>();
+        radii = GetComponent<PathEditor>().radii;
         path = GetComponent<PathEditor>().path;
-
-        CreateTunnel();
     }
 
     private void Update()
     {
-        if (Input.GetKeyDown(KeyCode.Space))
+        if (Input.GetKeyDown(KeyCode.M))
         {
+            MeshRenderer r = GetComponent<MeshRenderer>();
+            r.enabled = !r.enabled;
             CreateTunnel();
+        }
+
+        if (Input.GetKeyDown(KeyCode.N))
+        {
+            showGrid = !showGrid;
         }
     }
 
@@ -40,17 +48,9 @@ public class ProceduralTunnel : MonoBehaviour
         circles = new List<List<Vector3>>();
         for (int i = 0; i < path.NumSegments; ++i)
             circles.Add(new List<Vector3>());
-        
-        //(Re)initiate radii list
-        radii = new List<float>();
-        radii.Add(AverageRadius(start.mesh.vertices));
-        radii.Add(radii[0]);
-        radii.Add(AverageRadius(end.mesh.vertices));
 
         //Create circles
-        createCirclesInSegment(0);
-        createCirclesInSegment(path.NumSegments - 1);
-        for (int i = 1; i < path.NumSegments - 1; ++i)
+        for (int i = 0; i < path.NumSegments; ++i)
         {
             createCirclesInSegment(i);
         }
@@ -70,28 +70,28 @@ public class ProceduralTunnel : MonoBehaviour
         return circle;
     }
 
-    float[][] LerpRadii(float originalRadius, float[] radiiDiff, bool increase)
+    float[][] LerpRadii(float originalRadius, float[] radiiDiff, bool increase, int steps)
     {
-        float[][] res = new float[Eres + 1][];
+        float[][] res = new float[steps + 1][];
         if (increase)
         {
-            for (int i = 0; i < Eres + 1; ++i)
+            for (int i = 0; i <= steps; ++i)
             {
                 res[i] = new float[radiiDiff.Length];
                 for (int j = 0; j < radiiDiff.Length; ++j)
                 {
-                    res[i][j] = originalRadius + radiiDiff[j] * (float)i / (float)Eres;
+                    res[i][j] = originalRadius + radiiDiff[j] * (float)i / (float)steps;
                 }
             }
         }
         else
         {
-            for (int i = 0; i < Eres + 1; ++i)
+            for (int i = 0; i <= steps; ++i)
             {
-                res[Eres - i] = new float[radiiDiff.Length];
+                res[steps - i] = new float[radiiDiff.Length];
                 for (int j = 0; j < radiiDiff.Length; ++j)
                 {
-                    res[Eres - i][j] = originalRadius + radiiDiff[j] * (float)i / (float)Eres;
+                    res[steps - i][j] = originalRadius + radiiDiff[j] * (float)i / (float)steps;
                 }
             }
         }
@@ -99,18 +99,10 @@ public class ProceduralTunnel : MonoBehaviour
         return res;
     }
 
-    float AverageRadius(Vector3[] vertices)
-    {
-        float avg = 0;
-        foreach (Vector3 v in vertices)
-        {
-            avg += v.magnitude;
-        }
-        return avg / vertices.Length;
-    }
-
     void createCirclesInSegment(int segment)
     {
+        Vector3[] origins = path.GetConsistentNormals(start.transform.TransformPoint(start.mesh.vertices[1]), segment, Bres);
+        int res = (int)(path.SegmentLength(segment) / Bres);
         if (segment == 0)
         {
             List<Vector3> startV = new List<Vector3>();
@@ -124,7 +116,7 @@ public class ProceduralTunnel : MonoBehaviour
                 radDiff[i] = startV[i].magnitude - radii[0];
             }
             float[][] radDiffs;
-            radDiffs = LerpRadii(radii[0], radDiff, false);
+            radDiffs = LerpRadii(radii[0], radDiff, false, res);
 
             //Calculate angles
             float[] angles = new float[startV.Count];
@@ -134,83 +126,32 @@ public class ProceduralTunnel : MonoBehaviour
                 angles[i] = Vector3.SignedAngle(startV[i], startV[0], axis);
             }
 
-            //Create a clone Bezier curve to calculate origin of circles
-            Path normalBezier = new Path(start.transform.TransformPoint(startV[0]), path);
-
+            Path normalPath = new Path(start.transform.TransformPoint(startV[0]), path);
             //Create the circles
-            for (int c = 0; c < Eres; ++c)
+            for (int c = 0; c <= res; ++c)
             {
-                float t = (float)c / Eres;
+                float t = (float)c / (float)res;
                 Vector3 center = path.GetP(segment, t);
-                Vector3 origin = (normalBezier.GetP(segment, t) - center).normalized;
                 axis = path.GetT(segment, t);
                 for (int v = 0; v < startV.Count; ++v)
                 {
-                    circles[segment].Add(center + Quaternion.AngleAxis(angles[v], axis) * origin * radDiffs[c][v]);
+                    circles[segment].Add(center + Quaternion.AngleAxis(angles[v], axis) * origins[c] * radDiffs[c][v]);
                 }
-            }
-        }
-        else if (segment == path.NumSegments - 1)
-        {
-            int last = radii.Count - 1;
-            
-            List<Vector3> endV = new List<Vector3>();
-            endV.AddRange(end.mesh.vertices);
-            endV.RemoveAt(0);
-
-            //Lerp radii of the first section
-            float[] radDiff = new float[endV.Count];
-            for (int i = 0; i < radDiff.Length; ++i)
-            {
-                radDiff[i] = endV[i].magnitude - radii[last];
-            }
-            float[][] radDiffs;
-            radDiffs = LerpRadii(radii[last], radDiff, true);
-
-            //Calculate angles
-            float[] angles = new float[endV.Count];
-            Vector3 axis = Vector3.Cross(endV[0], endV[1]);
-            for (int i = 0; i < angles.Length; ++i)
-            {
-                angles[i] = Vector3.SignedAngle(endV[i], endV[0], axis);
-            }
-
-            //Create a clone Bezier curve to calculate origin of circles
-            Path normalBezier = new Path(path, end.transform.TransformPoint(endV[0]));
-
-            //Create the circles
-            for (int c = 0; c <= Eres; ++c)
-            {
-                float t = (float)c / Eres;
-                Vector3 center = path.GetP(segment, t);
-                Vector3 origin = (normalBezier.GetP(segment, t) - center).normalized;
-                axis = path.GetT(segment, t);
-                //Since the end mesh is connected on the other end of the tunnel, the vertices needs to be reversed
-                List<Vector3> temp = new List<Vector3>();
-                for (int v = 0; v < endV.Count; ++v)
-                {
-                    temp.Add(center + Quaternion.AngleAxis(angles[v], axis) * origin * radDiffs[c][v]);
-                }
-                temp.Reverse();
-                circles[segment].AddRange(temp);
             }
         }
         else
         {
-            float radius = radii[segment];
-            float radiusEnd = radii[segment + 1];
-            float radiusStep = (radiusEnd - radius) / (float)Bres;
-
-            Path normalBezier = new Path(start.transform.TransformPoint(start.mesh.vertices[1]), path);
+            float radius = radii[segment - 1];
+            float radiusEnd = radii[segment];
+            float radiusStep = (radiusEnd - radius) / (float)res;
 
             //Create circles
-            for (int i = 0; i <= Bres; ++i)
+            for (int i = 0; i <= res; ++i)
             {
-                float t = (float)i / Bres;
+                float t = (float)i / (float)res;
                 Vector3 center = path.GetP(segment, t);
-                Vector3 origin = (normalBezier.GetP(segment, t) - center).normalized;
                 Vector3 axis = path.GetT(segment, t);
-                circles[segment].AddRange(createCircle(center, axis, origin, radius));
+                circles[segment].AddRange(createCircle(center, axis, origins[i], radius));
                 radius += radiusStep;
             }
         }
@@ -221,7 +162,7 @@ public class ProceduralTunnel : MonoBehaviour
         //Generating array of triangles
         List<int> triangles = new List<int>();
         int idx = 0;
-        for (int seg = 0; seg < path.NumSegments; ++seg)
+        for (int seg = 0; seg < circles.Count; ++seg)
         {
             //Define boundaries of each segment
             int Outer;
@@ -230,19 +171,13 @@ public class ProceduralTunnel : MonoBehaviour
             //Start
             if (seg == 0)
             {
-                Outer = Eres - 1;
+                Outer = (int)(path.SegmentLength(seg) / Bres);
                 Inner = start.mesh.vertexCount - 1;
             }
-            //End
-            else if (seg == path.NumSegments - 1)
-            {
-                Outer = Eres;
-                Inner = end.mesh.vertexCount - 1;
-            }
-            //Middle
+            //The rest
             else
             {
-                Outer = Bres;
+                Outer = (int)(path.SegmentLength(seg) / Bres);
                 Inner = Cres;
             }
 
@@ -272,7 +207,6 @@ public class ProceduralTunnel : MonoBehaviour
 
         //Create the return mesh
         Mesh mesh = new Mesh();
-        mesh.Clear();
 
         //Generating array of vertices and triangles\
         List<Vector3> vertices = new List<Vector3>();
@@ -289,69 +223,38 @@ public class ProceduralTunnel : MonoBehaviour
         //Draw mesh
         GetComponent<MeshFilter>().mesh = mesh;
     }
-    /*
+    
     void OnDrawGizmos()
     {
-        if (Application.isPlaying)
+        if (Application.isPlaying && GetComponent<MeshRenderer>().enabled && showGrid)
         {
             Gizmos.color = Color.black;
             for (int seg = 0; seg < path.NumSegments; ++seg)
             {
-                if (seg == 0 || seg == path.NumSegments - 1)
-                {
-                    //Triangles of circles at the start/end of the tunnel
-                    int res;
-                    if (seg == 0)
-                        res = start.mesh.vertexCount - 1;
-                    else
-                        res = end.mesh.vertexCount - 1;
-                    for (int i = 0; i < Eres; ++i)
-                    {
-
-                        if (seg == 0 && i == Eres - 1)
-                            break;
-                        int p0lower = res * i;
-                        int p0higher = res * (i + 1);
-                        for (int j = 0; j < res - 1; ++j)
-                        {
-                            Gizmos.DrawLine(circles[seg][p0lower + j], circles[seg][p0lower + j + 1]);
-                            Gizmos.DrawLine(circles[seg][p0lower + j + 1], circles[seg][p0higher + j]);
-                            Gizmos.DrawLine(circles[seg][p0higher + j], circles[seg][p0lower + j]);
-                            Gizmos.DrawLine(circles[seg][p0lower + j + 1], circles[seg][p0higher + j + 1]);
-                            Gizmos.DrawLine(circles[seg][p0higher + j + 1], circles[seg][p0higher + j]);
-                        }
-                        Gizmos.DrawLine(circles[seg][p0lower + res - 1], circles[seg][p0lower]);
-                        Gizmos.DrawLine(circles[seg][p0lower], circles[seg][p0higher + res - 1]);
-                        Gizmos.DrawLine(circles[seg][p0higher + res - 1], circles[seg][p0lower + res - 1]);
-                        Gizmos.DrawLine(circles[seg][p0lower], circles[seg][p0higher]);
-                        Gizmos.DrawLine(circles[seg][p0higher], circles[seg][p0higher + res - 1]);
-                    }
-                }
+                int res;
+                if (seg == 0)
+                    res = start.mesh.vertexCount - 1;
                 else
+                    res = Cres;
+                for (int i = 0; i < (int)(path.SegmentLength(seg) / Bres); ++i)
                 {
-                    //Triangles of circles at the middle of the tunnel
-                    for (int i = 0; i < Bres; ++i)
+                    int p0lower = res * i;
+                    int p0higher = res * (i + 1);
+                    for (int j = 0; j < res - 1; ++j)
                     {
-                        int p0lower = Cres * i;
-                        int p0higher = Cres * (i + 1);
-                        for (int j = 0; j < Cres - 1; ++j)
-                        {
-                            Gizmos.DrawLine(circles[seg][p0lower + j], circles[seg][p0lower + j + 1]);
-                            Gizmos.DrawLine(circles[seg][p0lower + j + 1], circles[seg][p0higher + j]);
-                            Gizmos.DrawLine(circles[seg][p0higher + j], circles[seg][p0lower + j]);
-                            Gizmos.DrawLine(circles[seg][p0lower + j + 1], circles[seg][p0higher + j + 1]);
-                            Gizmos.DrawLine(circles[seg][p0higher + j + 1], circles[seg][p0higher + j]);
-                        }
-                        Gizmos.DrawLine(circles[seg][p0lower + Cres - 1], circles[seg][p0lower]);
-                        Gizmos.DrawLine(circles[seg][p0lower], circles[seg][p0higher + Cres - 1]);
-                        Gizmos.DrawLine(circles[seg][p0higher + Cres - 1], circles[seg][p0lower + Cres - 1]);
-                        Gizmos.DrawLine(circles[seg][p0lower], circles[seg][p0higher]);
-                        Gizmos.DrawLine(circles[seg][p0higher], circles[seg][p0higher + Cres - 1]);
+                        Gizmos.DrawLine(circles[seg][p0lower + j], circles[seg][p0lower + j + 1]);
+                        Gizmos.DrawLine(circles[seg][p0lower + j + 1], circles[seg][p0higher + j]);
+                        Gizmos.DrawLine(circles[seg][p0higher + j], circles[seg][p0lower + j]);
+                        Gizmos.DrawLine(circles[seg][p0lower + j + 1], circles[seg][p0higher + j + 1]);
+                        Gizmos.DrawLine(circles[seg][p0higher + j + 1], circles[seg][p0higher + j]);
                     }
+                    Gizmos.DrawLine(circles[seg][p0lower + res - 1], circles[seg][p0lower]);
+                    Gizmos.DrawLine(circles[seg][p0lower], circles[seg][p0higher + res - 1]);
+                    Gizmos.DrawLine(circles[seg][p0higher + res - 1], circles[seg][p0lower + res - 1]);
+                    Gizmos.DrawLine(circles[seg][p0lower], circles[seg][p0higher]);
+                    Gizmos.DrawLine(circles[seg][p0higher], circles[seg][p0higher + res - 1]);
                 }
             }
         }
-        
     }
-    */
 }
